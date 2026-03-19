@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>航昇關係企業組織圖 - 專業版</title>
+<style>
+  :root {
+    --accent-blue: #3b6fba;
+    --neon-shadow: 0 0 15px rgba(59, 111, 186, 0.4);
+    --bg-dark: #0f1117;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg-dark);
+    font-family: 'Noto Sans TC', 'Microsoft JhengHei', sans-serif;
+    height: 100vh;
+    overflow: hidden; /* 防止原生捲軸干擾縮放 */
+    color: #e2e4f0;
+  }
+
+  /* ── 控制列 ── */
+  .toolbar {
+    position: fixed; top: 20px; left: 20px;
+    z-index: 2000;
+    display: flex; gap: 10px; align-items: center;
+    background: rgba(26, 29, 39, 0.8);
+    padding: 12px 20px;
+    border-radius: 50px;
+    border: 1px solid #2e3347;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+  }
+  .search-input {
+    background: #0f1117;
+    border: 1px solid #3b6fba;
+    color: white;
+    padding: 6px 15px;
+    border-radius: 20px;
+    outline: none;
+    font-size: 13px;
+    width: 180px;
+    transition: 0.3s;
+  }
+  .search-input:focus { box-shadow: 0 0 10px rgba(59, 111, 186, 0.5); width: 220px; }
+  
+  .btn {
+    background: #2e3347;
+    color: #c8cad4;
+    border: none;
+    padding: 6px 15px;
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: 0.2s;
+  }
+  .btn:hover { background: #3b6fba; color: white; }
+
+  /* ── 畫布容器 (Zoom & Pan) ── */
+  #viewport {
+    width: 100vw; height: 100vh;
+    cursor: grab;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #viewport:active { cursor: grabbing; }
+  
+  #canvas {
+    transform-origin: 0 0;
+    transition: transform 0.05s linear; /* 平滑縮放 */
+    will-change: transform;
+    padding: 200px; /* 給予足夠緩衝空間 */
+  }
+
+  .company-title { text-align: center; margin-bottom: 50px; pointer-events: none; }
+  .company-title h1 { font-size: 24px; font-weight: 500; color: #e2e4f0; letter-spacing: 0.2em; text-shadow: 0 0 10px rgba(226, 228, 240, 0.3); }
+
+  .tree-wrap { display: flex; flex-direction: column; align-items: center; }
+
+  /* ── 霓虹卡片特效 ── */
+  .card {
+    border-radius: 10px;
+    border: 1px solid;
+    padding: 12px 20px;
+    text-align: center;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    background: #1a1d27;
+  }
+  .card:hover {
+    transform: translateY(-5px);
+    filter: brightness(1.2);
+    box-shadow: var(--hover-glow); /* 動態注入變數 */
+  }
+  
+  /* 高亮效果 (搜尋到時) */
+  .card.highlight {
+    border-color: #fff !important;
+    box-shadow: 0 0 25px #fff, inset 0 0 10px #fff !important;
+    transform: scale(1.1);
+    z-index: 100;
+  }
+
+  .card-name  { font-size: 14px; font-weight: 600; }
+  .card-title { font-size: 11px; margin-top: 4px; opacity: 0.8; }
+  .card-arrow { font-size: 10px; margin-top: 6px; opacity: 0.5; transition: 0.3s; }
+  .card-arrow.open  { transform: rotate(180deg); }
+
+  /* ── 各部門顏色與霓虹光譜 ── */
+  .c-top   { border-color:#3b6fba; --hover-glow: 0 0 20px rgba(59, 111, 186, 0.7); }
+  .c-top .card-name { color: #80aee8; }
+
+  .c-staff { border-color:#6d5dfc; --hover-glow: 0 0 20px rgba(109, 93, 252, 0.7); }
+  .c-staff .card-name { color: #a898e8; }
+
+  .c-dept  { border-color:#5ec9a8; --hover-glow: 0 0 20px rgba(94, 201, 168, 0.7); }
+  .c-dept .card-name { color: #5ec9a8; }
+
+  .c-sub   { border-color:#1e3a6e; --hover-glow: 0 0 20px rgba(30, 58, 110, 0.7); }
+  
+  .c-mgr   { border-color:#4a5064; --hover-glow: 0 0 15px rgba(127, 132, 153, 0.5); }
+  
+  .c-grp   { border-color:#e0a83a; --hover-glow: 0 0 20px rgba(224, 168, 58, 0.7); }
+  .c-grp .card-name { color: #e0a83a; }
+
+  .c-mem   { border-color:#252839; background: #11131a; --hover-glow: 0 0 15px rgba(255,255,255,0.2); }
+
+  /* ── 連線樣式 ── */
+  .v-line { width: 1px; height: 20px; background: #343a4e; align-self: center; }
+  .h-row { display: flex; justify-content: center; position: relative; gap: 24px; }
+  .h-row::before {
+    content: ''; position: absolute; top: 0; height: 1px; background: #343a4e;
+    left: var(--hl); width: var(--hw); transition: 0.32s ease;
+  }
+
+  .children-wrap {
+    display: flex; flex-direction: column; align-items: center;
+    overflow: hidden; max-height: 5000px; opacity: 1;
+    transition: max-height 0.4s ease, opacity 0.3s ease;
+  }
+  .children-wrap.collapsed { max-height: 0; opacity: 0; pointer-events: none; }
+
+  /* ── 資訊面板 ── */
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 2999; display:none; opacity:0; transition: 0.3s; }
+  .overlay.show { display: block; opacity: 1; }
+  .info-panel {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.9);
+    background: #1a1d27; border: 1px solid #3b6fba; border-radius: 20px;
+    padding: 30px; z-index: 3000; width: 320px; visibility: hidden; opacity: 0; transition: 0.3s;
+    box-shadow: 0 0 40px rgba(0,0,0,0.5), 0 0 20px rgba(59, 111, 186, 0.2);
+  }
+  .info-panel.show { visibility: visible; opacity: 1; transform: translate(-50%, -50%) scale(1); }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <input type="text" class="search-input" id="searchInput" placeholder="搜尋姓名/職稱..." onkeyup="handleSearch(event)">
+  <button class="btn" onclick="expandAll()">全部展開</button>
+  <button class="btn" onclick="collapseAll()">全部收合</button>
+  <button class="btn" onclick="resetView()">重置視角</button>
+</div>
+
+<div id="viewport">
+  <div id="canvas">
+    <div class="company-title">
+      <h1>航昇關係企業組織圖</h1>
+      <p style="color:#565869; margin-top:8px;">2025 年 12 月・互動管理系統</p>
+    </div>
+    <div class="tree-wrap" id="tree"></div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="closePanel()"></div>
+<div class="info-panel" id="panel">
+  <div style="text-align:right"><button onclick="closePanel()" style="background:none; border:none; color:#565869; cursor:pointer;">✕</button></div>
+  <h2 id="pname" style="color:#fff; margin-bottom:5px;"></h2>
+  <p id="ptitle" style="color:#3b6fba; font-size:14px; margin-bottom:20px;"></p>
+  <div style="border-top:1px solid #2e3347; padding-top:15px; font-size:13px; color:#c8cad4;">
+    <p>隸屬單位：航昇關係企業</p>
+    <p style="margin-top:8px;">狀態：在職</p>
+  </div>
+</div>
+
+<script>
+/* ── 資料數據 (同原版) ── */
+const DATA = [
+  { id:'board', name:'董事會', color:'c-top', noPanel:true, children:[
+    { id:'chairman', name:'魏程師', title:'董事長', color:'c-top', children:[
+      { id:'staff-room', name:'董事長室', color:'c-staff', isStaff:true, children:[
+        { id:'asst', name:'祝彩蘋', title:'董事長特助', color:'c-mem' },
+        { id:'sec',  name:'孔振蕊', title:'董事長秘書', color:'c-mem' },
+      ]},
+      { id:'gm', name:'謝淑瑤', title:'總經理', color:'c-top', children:[
+        { id:'mgmt', name:'管理部', color:'c-staff', isStaff:true, children:[
+          { id:'comp', name:'孔振蕊／李一中', title:'合規',         color:'c-mem' },
+          { id:'it',   name:'謝佩芬',         title:'資訊組副理',   color:'c-mem' },
+          { id:'ga',   name:'魏嘉俊',         title:'總務／人事行政', color:'c-mem' },
+        ]},
+        { id:'shipping', name:'船務代理處', color:'c-dept', children:[
+          { id:'agency', name:'總代理部', color:'c-sub', children:[
+            { id:'op-vp', name:'孔振蕊', title:'船務操作副總', color:'c-mgr', children:[
+              { id:'op-c1', name:'林虹君', title:'船務操作協理', color:'c-mgr', children:[
+                { id:'op-s1', name:'曾健倫', title:'船務操作專員', color:'c-mem' },
+                { id:'op-s2', name:'周錦絹', title:'船務操作專員', color:'c-mem' },
+                { id:'op-s3', name:'洪映芬', title:'船務操作專員', color:'c-mem' },
+                { id:'op-s4', name:'劉新喜', title:'船務操作專員', color:'c-mem' },
+              ]},
+              { id:'op-m2', name:'李岱玲', title:'船務操作經理', color:'c-mgr', children:[
+                { id:'op-d1', name:'康靈祺', title:'船務操作副理', color:'c-mem' },
+                { id:'op-s5', name:'賴雅婷', title:'船務操作專員', color:'c-mem' },
+                { id:'op-s6', name:'王湞潞', title:'船務操作專員', color:'c-mem' },
+                { id:'op-s7', name:'廖婕婷', title:'船務操作專員', color:'c-mem' },
+              ]},
+              { id:'op-d2', name:'呂文漪', title:'船務操作副理', color:'c-mgr', children:[
+                { id:'op-s8', name:'盧麗雯', title:'船務操作專員', color:'c-mem' },
+                { id:'op-s9', name:'陳盈瑄', title:'船務操作專員', color:'c-mem' },
+              ]},
+            ]},
+          ]},
+          { id:'port', name:'港代理部', color:'c-sub', children:[
+            { id:'fvp', name:'廖永照', title:'現場船務副總', color:'c-mgr', children:[
+              { id:'oil', name:'廖永照', title:'油化現場船務', color:'c-mgr', children:[
+                { id:'oil1', name:'鄭文傑', title:'現場船務專員',   color:'c-mem' },
+                { id:'oil2', name:'蘇慶星', title:'現場船務專員',   color:'c-mem' },
+                { id:'oil3', name:'何偉群', title:'麥寮辦事處代表', color:'c-mem' },
+              ]},
+              { id:'bulk', name:'劉昌城', title:'乾散雜現場船務經理', color:'c-mgr', children:[
+                { id:'bk1', name:'陳秉寬', title:'現場船務專員', color:'c-mem' },
+                { id:'bk2', name:'陳立農', title:'現場船務專員', color:'c-mem' },
+                { id:'bk3', name:'紀凱銘', title:'現場船務副理', color:'c-mem' },
+              ]},
+              { id:'cont', name:'羅一平', title:'貨櫃現場船務經理', color:'c-mgr', children:[
+                { id:'ct1', name:'紀凱銘', title:'現場船務副理', color:'c-mem' },
+                { id:'ct2', name:'蘇慶星', title:'現場船務專員', color:'c-mem' },
+              ]},
+              { id:'portdm', name:'許佳榮', title:'港務副理', color:'c-mgr', children:[
+                { id:'pt1', name:'梁季暉', title:'港務專員', color:'c-mem' },
+              ]},
+              { id:'docdm', name:'邱台美', title:'文件部副理', color:'c-mgr', children:[
+                { id:'dc1', name:'顏佳怡', title:'文件專員', color:'c-mem' },
+                { id:'dc2', name:'陽妮潔', title:'文件專員', color:'c-mem' },
+                { id:'dc3', name:'薛愛倫', title:'文件專員', color:'c-mem' },
+                { id:'dc4', name:'李俊賢', title:'關務',     color:'c-mem' },
+              ]},
+            ]},
+          ]},
+        ]},
+        { id:'logistics', name:'物流事業處', color:'c-dept', children:[
+          { id:'freight', name:'海運承攬部', color:'c-sub', children:[
+            { id:'frvp', name:'翁慧君', title:'海運承攬副總', color:'c-mgr', children:[
+              { id:'frop', name:'操作', color:'c-grp', children:[
+                { id:'fro1', name:'簡麗玲', title:'承攬部操作/文件', color:'c-mgr', children:[
+                  { id:'fro1a', name:'陳宥如', title:'承攬部文件助理', color:'c-mem' },
+                ]},
+                { id:'fro2', name:'蘇敉瑤', title:'承攬部文件出口', color:'c-mem' },
+                { id:'fro3', name:'郭永諒', title:'承攬部現場',     color:'c-mem' },
+              ]},
+              { id:'frbiz', name:'業務', color:'c-grp', children:[
+                { id:'frb1', name:'(TBD)', title:'承攬部業務專員', color:'c-mem', children:[
+                  { id:'frb1a', name:'李旻娟', title:'業務助理', color:'c-mem' },
+                ]},
+              ]},
+            ]},
+          ]},
+          { id:'charter', name:'租船經紀部', color:'c-sub', children:[
+            { id:'chvp', name:'呂文祺', title:'租船經紀副總', color:'c-mgr', children:[
+              { id:'chop', name:'操作', color:'c-grp', children:[
+                { id:'cho1', name:'林詩倩', title:'租船經紀操作', color:'c-mem' },
+                { id:'cho2', name:'許玉燕', title:'租船經紀操作', color:'c-mem' },
+                { id:'cho3', name:'蘇崇瑋', title:'租船經紀文件', color:'c-mem' },
+              ]},
+              { id:'chbiz', name:'業務', color:'c-grp', children:[
+                { id:'chb1', name:'王仁育', title:'租船經紀協理', color:'c-mem' },
+                { id:'chb2', name:'李一中', title:'租船經紀協理', color:'c-mem' },
+                { id:'chb3', name:'陸藝',   title:'租船經紀經理', color:'c-mem' },
+                { id:'chb4', name:'曾健倫', title:'租船經紀經理', color:'c-mem' },
+              ]},
+            ]},
+          ]},
+          { id:'chem', name:'化學櫃租賃部', color:'c-sub', children:[
+            { id:'chvp2', name:'呂文祺', title:'化學櫃租賃副總', color:'c-mgr', children:[
+              { id:'cham', name:'王書婷', title:'業務協理', color:'c-mgr', children:[
+                { id:'chs1', name:'趙玉如', title:'進口文件', color:'c-mem' },
+                { id:'chs2', name:'潘綵瑄', title:'貨櫃控制', color:'c-mem' },
+                { id:'chs3', name:'林詩倩', title:'操作',     color:'c-mem' },
+                { id:'chs4', name:'李芝瑜', title:'操作',     color:'c-mem' },
+                { id:'chs5', name:'葉詩怡', title:'文件專員', color:'c-mgr', children:[
+                  { id:'chs5a', name:'林崇欣', title:'文件專員', color:'c-mem' },
+                ]},
+              ]},
+            ]},
+          ]},
+        ]},
+        { id:'acct', name:'會計部', color:'c-dept', children:[
+          { id:'awis', name:'徐淑玲', title:'航昇威仕經理', color:'c-mgr', children:[
+            { id:'aship', name:'船帳', color:'c-grp', children:[
+              { id:'as1', name:'葉盈儀', title:'船帳', color:'c-mem' },
+              { id:'as2', name:'張淑娟', title:'船帳', color:'c-mem' },
+              { id:'as3', name:'陳怡分', title:'船帳', color:'c-mem' },
+              { id:'as4', name:'陳韋伶', title:'船帳', color:'c-mem' },
+              { id:'as5', name:'凌曉恬', title:'船帳', color:'c-mem' },
+              { id:'as6', name:'李惠銘', title:'船帳', color:'c-mem' },
+            ]},
+            { id:'aacc', name:'會計', color:'c-grp', children:[
+              { id:'aa1', name:'曾慧怡', title:'會計', color:'c-mem' },
+              { id:'aa2', name:'葉容禎', title:'會計', color:'c-mem' },
+            ]},
+            { id:'acash', name:'方麗娜', title:'出納', color:'c-mem' },
+          ]},
+          { id:'anav', name:'謝宛真', title:'航昇船務副理', color:'c-mgr', children:[
+            { id:'ach',  name:'李維玲', title:'租船經紀會計', color:'c-mem' },
+            { id:'acm1', name:'孫玉珊', title:'化學櫃部會計', color:'c-mem' },
+            { id:'acm2', name:'郭淑慧', title:'化學櫃部會計', color:'c-mem' },
+            { id:'afr',  name:'阮翊甯', title:'承攬會計', color:'c-mgr', children:[
+              { id:'afr1', name:'賴芊華', title:'承攬會計助理', color:'c-mem' },
+            ]},
+          ]},
+        ]},
+      ]},
+    ]},
+  ]},
+];
+
+/* ── 狀態管理 ── */
+const state = {
+  collapsed: new Set(),
+  scale: 0.8,
+  translateX: 0,
+  translateY: 0,
+  isDragging: false,
+  startX: 0, startY: 0
+};
+
+/* ── 渲染核心 ── */
+function buildNode(node, container) {
+  const col = document.createElement('div');
+  col.className = 'node-col';
+  col.dataset.id = node.id;
+
+  const card = document.createElement('div');
+  card.className = `card ${node.color}`;
+  card.id = `card-${node.id}`;
+  const hasKids = node.children && node.children.length > 0;
+
+  card.innerHTML = `
+    <div class="card-name">${node.name}</div>
+    ${node.title ? `<div class="card-title">${node.title}</div>` : ''}
+    ${hasKids ? `<div class="card-arrow open">▾</div>` : ''}
+  `;
+
+  card.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (hasKids) toggleNode(node.id);
+    if (!node.noPanel) showPanel(node);
+  });
+
+  col.appendChild(card);
+
+  if (hasKids) {
+    col.appendChild(Object.assign(document.createElement('div'), {className:'v-line'}));
+    const wrap = document.createElement('div');
+    wrap.className = 'children-wrap';
+    wrap.dataset.for = node.id;
+
+    const row = document.createElement('div');
+    row.className = 'h-row';
+    node.children.forEach(c => buildNode(c, row));
+    wrap.appendChild(row);
+    col.appendChild(wrap);
+  }
+  container.appendChild(col);
+}
+
+/* ── 摺疊功能 ── */
+function toggleNode(id, forceState) {
+  const wrap = document.querySelector(`.children-wrap[data-for="${id}"]`);
+  const arrow = document.querySelector(`#card-${id} .card-arrow`);
+  if (!wrap) return;
+
+  const isCollapsing = (forceState !== undefined) ? forceState : !state.collapsed.has(id);
+  
+  if (isCollapsing) state.collapsed.add(id);
+  else state.collapsed.delete(id);
+
+  wrap.classList.toggle('collapsed', isCollapsing);
+  if (arrow) arrow.classList.toggle('open', !isCollapsing);
+  
+  setTimeout(updateLines, 50);
+}
+
+function expandAll() {
+  state.collapsed.clear();
+  document.querySelectorAll('.children-wrap').forEach(el => el.classList.remove('collapsed'));
+  document.querySelectorAll('.card-arrow').forEach(el => el.classList.add('open'));
+  updateLines();
+}
+
+function collapseAll() {
+  document.querySelectorAll('.children-wrap').forEach(el => {
+    const id = el.dataset.for;
+    if(id !== 'board') { // 保留最頂層
+      state.collapsed.add(id);
+      el.classList.add('collapsed');
+    }
+  });
+  document.querySelectorAll('.card-arrow').forEach(el => el.classList.remove('open'));
+  updateLines();
+}
+
+/* ── 連線重繪 ── */
+function updateLines() {
+  document.querySelectorAll('.h-row').forEach(row => {
+    const cols = Array.from(row.children).filter(c => c.classList.contains('node-col'));
+    if (cols.length < 2) return;
+    const fc = cols[0].querySelector('.card').getBoundingClientRect();
+    const lc = cols[cols.length - 1].querySelector('.card').getBoundingClientRect();
+    const parentRect = row.getBoundingClientRect();
+    
+    // 計算相對位移，排除縮放影響
+    const left = (fc.left + fc.width/2 - parentRect.left) / state.scale;
+    const right = (lc.left + lc.width/2 - parentRect.left) / state.scale;
+    
+    row.style.setProperty('--hl', left + 'px');
+    row.style.setProperty('--hw', (right - left) + 'px');
+  });
+}
+
+/* ── 縮放與平移 ── */
+const viewport = document.getElementById('viewport');
+const canvas = document.getElementById('canvas');
+
+viewport.addEventListener('wheel', e => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? 0.9 : 1.1;
+  state.scale = Math.min(Math.max(0.2, state.scale * delta), 3);
+  applyTransform();
+}, { passive: false });
+
+viewport.addEventListener('mousedown', e => {
+  state.isDragging = true;
+  state.startX = e.clientX - state.translateX;
+  state.startY = e.clientY - state.translateY;
+});
+
+window.addEventListener('mousemove', e => {
+  if (!state.isDragging) return;
+  state.translateX = e.clientX - state.startX;
+  state.translateY = e.clientY - state.startY;
+  applyTransform();
+});
+
+window.addEventListener('mouseup', () => state.isDragging = false);
+
+function applyTransform() {
+  canvas.style.transform = `translate(${state.translateX}px, ${state.translateY}px) scale(${state.scale})`;
+  updateLines();
+}
+
+function resetView() {
+  state.scale = 0.8;
+  state.translateX = 0;
+  state.translateY = 0;
+  applyTransform();
+}
+
+/* ── 搜尋功能 ── */
+function handleSearch(e) {
+  const val = e.target.value.trim().toLowerCase();
+  document.querySelectorAll('.card').forEach(c => c.classList.remove('highlight'));
+  
+  if (!val) return;
+
+  const findAndOpen = (nodes) => {
+    let found = false;
+    for (const n of nodes) {
+      const match = n.name.toLowerCase().includes(val) || (n.title && n.title.toLowerCase().includes(val));
+      if (match) {
+        document.getElementById(`card-${n.id}`).classList.add('highlight');
+        found = true;
+      }
+      const childFound = n.children ? findAndOpen(n.children) : false;
+      if (childFound || match) {
+        if(n.children) toggleNode(n.id, false); // 打開父層
+        found = true;
+      }
+    }
+    return found;
+  };
+
+  findAndOpen(DATA);
+}
+
+/* ── 面板控制 ── */
+function showPanel(node) {
+  document.getElementById('pname').textContent = node.name;
+  document.getElementById('ptitle').textContent = node.title || '部門節點';
+  document.getElementById('overlay').classList.add('show');
+  document.getElementById('panel').classList.add('show');
+}
+function closePanel() {
+  document.getElementById('overlay').classList.remove('show');
+  document.getElementById('panel').classList.remove('show');
+}
+
+/* ── 初始化 ── */
+const treeEl = document.getElementById('tree');
+DATA.forEach(n => buildNode(n, treeEl));
+setTimeout(() => {
+  applyTransform();
+  updateLines();
+}, 100);
+window.addEventListener('resize', updateLines);
+</script>
+</body>
+</html>
