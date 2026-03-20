@@ -1,0 +1,1343 @@
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-sans, 'Noto Sans TC', 'Microsoft JhengHei', sans-serif); }
+#canvas-wrap { width: 100%; height: 620px; overflow: hidden; position: relative; background: #1E1E1E; border-radius: var(--border-radius-lg, 12px); border: 0.5px solid #3C3C3C; }
+#svg-canvas { width: 100%; height: 100%; cursor: grab; }
+#svg-canvas.dragging { cursor: grabbing; }
+.node-group { cursor: pointer; }
+.node-rect { transition: filter 0.2s; }
+
+/* ── 側邊面板遮罩 ── */
+#panel-overlay {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,0.45);
+  backdrop-filter: blur(2px);
+  z-index: 100;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.28s ease;
+  border-radius: inherit;
+}
+#panel-overlay.show { opacity: 1; pointer-events: all; }
+
+/* ── 側邊滑入面板 ── */
+#detail-panel {
+  position: absolute; top: 0; left: 0;
+  width: 320px; height: 100%;
+  background: #1E1E1E;
+  border-right: 0.5px solid #3C3C3C;
+  border-radius: var(--border-radius-lg, 12px) 0 0 var(--border-radius-lg, 12px);
+  display: flex; flex-direction: column;
+  z-index: 101;
+  transform: translateX(-100%);
+  transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
+  overflow: hidden;
+}
+#detail-panel.show { transform: translateX(0); }
+
+/* 面板 header */
+#dp-header {
+  padding: 16px 16px 12px;
+  border-bottom: 0.5px solid #2D2D2D;
+  flex-shrink: 0;
+  position: relative;
+}
+#dp-avatar {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+#dp-name  { font-size: 16px; font-weight: 600; color: #D4D4D4; }
+#dp-title { font-size: 12px; color: #808080; margin-top: 2px; }
+#detail-close {
+  position: absolute; top: 12px; right: 12px;
+  background: #2D2D2D; border: 0.5px solid #3C3C3C;
+  color: #808080; font-size: 14px; cursor: pointer;
+  width: 26px; height: 26px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: inherit; padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+#detail-close:hover { background: #3C3C3C; color: #D4D4D4; }
+
+/* 面板內容捲動區 */
+#dp-body {
+  flex: 1; overflow-y: auto; padding: 14px 16px 20px;
+  scrollbar-width: thin; scrollbar-color: #3C3C3C transparent;
+}
+#dp-body::-webkit-scrollbar { width: 4px; }
+#dp-body::-webkit-scrollbar-thumb { background: #3C3C3C; border-radius: 2px; }
+
+/* ── RWD 手機：底部滑入 ── */
+@media (max-width: 600px) {
+  #detail-panel {
+    top: auto; bottom: 0; left: 0; right: 0;
+    width: 100%; height: 70%;
+    border-right: none; border-top: 0.5px solid #3C3C3C;
+    border-radius: var(--border-radius-lg, 12px) var(--border-radius-lg, 12px) 0 0;
+    transform: translateY(100%);
+  }
+  #detail-panel.show { transform: translateY(0); }
+}
+
+#toolbar { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+button { font-size: 12px; padding: 5px 12px; border-radius: 20px; border: 0.5px solid #3C3C3C; background: #252526; color: #D4D4D4; cursor: pointer; font-family: inherit; }
+button:hover { background: #2D2D2D; color: #FFFFFF; }
+#zoom-info { font-size: 11px; color: #808080; padding: 5px 10px; align-self: center; }
+</style>
+
+<div id="toolbar">
+  <button id="btn-expand">全部展開</button>
+  <button id="btn-collapse">全部收合</button>
+  <button id="btn-reset">重設視角</button>
+  <button id="btn-zoomin">＋ 放大</button>
+  <button id="btn-zoomout">－ 縮小</button>
+  <span id="zoom-info">滾輪縮放 ｜ 拖曳平移 ｜ 點擊展開/詳情</span>
+</div>
+<div id="canvas-wrap">
+  <svg id="svg-canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+
+  <!-- 半透明遮罩 -->
+  <div id="panel-overlay"></div>
+
+  <!-- 右側滑入面板 -->
+  <div id="detail-panel">
+    <div id="dp-header">
+      <button id="detail-close">✕</button>
+      <div id="dp-avatar"></div>
+      <div id="dp-name"></div>
+      <div id="dp-title"></div>
+    </div>
+    <div id="dp-body"></div>
+  </div>
+</div>
+
+<script>
+const BG      = '#1E1E1E';
+const BG2     = '#252526';
+const TEXT     = '#D4D4D4';  
+const SUBTEXT  = '#9CDCFE';  
+const DIM      = '#6A9955';  
+
+const COLORS = {
+  
+  'c-top':        { fill:BG, stroke:'#D4D4D4', text:TEXT,    sub:'#9CDCFE' },
+  
+  'c-staff':      { fill:BG, stroke:'#808080', text:'#C8C8C8', sub:'#808080' },
+  
+  'c-shipping':   { fill:BG, stroke:'#569CD6', text:TEXT,    sub:'#569CD6' },
+  
+  'c-agency':     { fill:BG, stroke:'#4EC9B0', text:TEXT,    sub:'#4EC9B0' },
+  
+  'c-port':       { fill:BG, stroke:'#9CDCFE', text:TEXT,    sub:'#9CDCFE' },
+  
+  'c-logistics':  { fill:BG, stroke:'#DCDCAA', text:TEXT,    sub:'#DCDCAA' },
+  
+  'c-freight':    { fill:BG, stroke:'#CE9178', text:TEXT,    sub:'#CE9178' },
+  
+  'c-charter':    { fill:BG, stroke:'#C586C0', text:TEXT,    sub:'#C586C0' },
+  
+  'c-chem':       { fill:BG, stroke:'#6A9955', text:TEXT,    sub:'#6A9955' },
+  
+  'c-acct':       { fill:BG, stroke:'#F44747', text:TEXT,    sub:'#F44747' },
+  
+  'c-mem':        { fill:BG2, stroke:'#3C3C3C', text:'#C8C8C8', sub:'#6A737D' },
+};
+
+const data = {
+  id:'board', name:'董事會', color:'c-top', noPanel:true,
+  children:[
+    { id:'chairman', name:'魏程師', title:'董事長', color:'c-top',
+      children:[
+        { id:'staff-room', name:'董事長室', color:'c-staff',
+          children:[
+            { id:'asst', name:'祝彩蘋', title:'董事長特助', duty:'董事長特助', grade:'副總經理', color:'c-staff', children:[] },
+            { id:'sec',  name:'孔振蕊', title:'董事長秘書', duty:'董事長秘書', grade:'副總經理', color:'c-staff', children:[] },
+          ]
+        },
+        { id:'gm', name:'謝淑瑤', title:'總經理', color:'c-top',
+          children:[
+            { id:'mgmt', name:'管理部', color:'c-staff',
+              children:[
+                { id:'comp1', name:'孔振蕊', title:'合規', duty:'合規', grade:'副總經理',
+                  directManager:'gm',
+                  resps:[{
+                    desc:'合規',
+                    tasks:[
+                      '制定和更新公司內部的合規政策與程序',
+                      '與主管機構溝通，應對監管檢查',
+                      '配合內外部稽核',
+                      '組織相關培訓，確保員工了解公司政策、法規要求',
+                      '調查潛在的違規行為或投訴',
+                      '向管理層或董事會報告合規狀況、評估風險和潛在問題',
+                    ]
+                  }],
+                  permissions:[
+                    '在權限範圍內，有代表公司對外聯絡的權力',
+                    '有對各項費用開支的審核權',
+                    '對限額資金使用有批准權',
+                  ],
+                  color:'c-staff', children:[] },
+                { id:'comp2', name:'李一中', title:'合規', duty:'合規', grade:'協理',
+                  directManager:'gm',
+                  resps:[{
+                    desc:'合規',
+                    tasks:[
+                      '制定和更新公司內部的合規政策與程序',
+                      '與主管機構溝通，應對監管檢查',
+                      '配合內外部稽核',
+                      '組織相關培訓，確保員工了解公司政策、法規要求',
+                      '調查潛在的違規行為或投訴',
+                      '向管理層或董事會報告合規狀況、評估風險和潛在問題',
+                    ]
+                  }],
+                  permissions:[
+                    '在權限範圍內，有代表公司對外聯絡的權力',
+                    '有對各項費用開支的審核權',
+                    '對限額資金使用有批准權',
+                  ],
+                  color:'c-staff', children:[] },
+                { id:'it', name:'謝佩芬', title:'資訊組副理', duty:'資訊', grade:'副經理',
+                  directManager:'gm',
+                  resps:[{
+                    desc:'資訊組副理職責',
+                    tasks:[
+                      '硬體設備採購、維護',
+                      '系統、軟體、設定、輔助、解決問題',
+                      '文件、表格、設計、設定、協助',
+                      'Email 管理設定',
+                      '事務機管理設定',
+                      '電話傳真手機門號管理',
+                    ]
+                  }],
+                  permissions:[
+                    '在權限範圍內，有代表公司對外聯絡的權力',
+                    '有對各項費用開支的審核權',
+                    '對限額資金使用有批准權',
+                  ],
+                  color:'c-staff', children:[] },
+                { id:'ga', name:'魏嘉俊', title:'總務／人事行政', duty:'總務', grade:'專員',
+                  directManager:'gm',
+                  resps:[{
+                    desc:'總務',
+                    tasks:[
+                      '員工勞健保',
+                      '公司文具清潔器具採購',
+                      '更換公司燈管',
+                      '維修電腦',
+                      '寄送郵件',
+                      '和大樓管委會保持聯絡來通知公司同仁相對應的消息及公共地區的維修',
+                      '去銀行存款及提款',
+                      '統計送禮數量及金額及酒類庫存數量',
+                    ]
+                  }],
+                  permissions:[
+                    '在權限範圍內，有代表公司對外聯絡的權力',
+                    '有對各項費用開支的審核權',
+                    '對限額資金使用有批准權',
+                  ],
+                  color:'c-staff', children:[] },
+              ]
+            },
+            { id:'shipping', name:'船務代理處', color:'c-shipping',
+              children:[
+                { id:'agency', name:'總代理部', color:'c-agency',
+                  children:[
+                    { id:'op-vp', name:'孔振蕊', title:'船務操作副總', duty:'船務操作', grade:'副總經理', directManager:'gm',
+                      resps:[{desc:'', tasks:['國外客戶拜訪','審核代理費報價','注意代理指定郵件','注意詢問郵件','工作分配調解','簽提單','簽船帳','支援有難題之案件','注意應收帳款催帳狀態','客戶要求之稽核','月報表製作與提交','潛在客戶收集','客戶開發','審閱代理合約']}],
+                      permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                      color:'c-agency',
+                      children:[
+                        { id:'op-c1', name:'林虹君', title:'船務操作協理', duty:'船務操作', grade:'協理', directManager:'op-vp',
+                          resps:[{desc:'', tasks:['管理乾散雜貨船工作分配','回覆詢價，港口資訊，貨物裝卸貨相關訊息','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司等並提供報價','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船員交換','船帳審核']}],
+                          permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                          color:'c-agency',
+                          children:[
+                            { id:'op-s1', name:'曾健倫', title:'船務操作經理', duty:'船務操作', grade:'經理', directManager:'op-c1',
+                              resps:[{desc:'', tasks:['協助副總經理出差或休假時管理油化船組工作分配','回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']}],
+                              permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                              color:'c-mem', children:[] },
+                            { id:'op-s2', name:'周錦絹', title:'船務操作專員', duty:'船務操作', grade:'專員', directManager:'op-c1', resps:[{desc:'', tasks:['回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                            { id:'op-s3', name:'洪映芬', title:'船務操作專員', duty:'船務操作', grade:'專員', directManager:'op-c1',
+                              resps:[
+                                {desc:'', tasks:['回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']},
+                                {desc:'散裝船總代理（裕民、偉林、友聖、新興、大通）進出港作業', tasks:[
+                                  '進港前：收發EMAIL相關資料給船務辦理業務登記/進港預報，關務掛號',
+                                  '進港前：預估港費給總代理公司',
+                                  '進港前：碼頭及進港時間確定後，發MAIL通知船上及總代理等相關人員，製作NOR文件交給現場作業人員',
+                                  '船東工作：船員異動/加油/船東或總代理人員、眷屬、廠商申請登輪作業',
+                                  '船靠岸後：發ARRIVAL / DAILY WORKING REPORT 至總代理公司',
+                                  '船離岸後：發DEPARTURE REPORT至總代理，再將相關作業文件EMAIL給總代理',
+                                  '貨櫃船總代理（萬通、瑞世、式邦、民生）：開船後發TDR至總代理',
+                                  '每月月初製作前一個月船隻統計表給總經理',
+                                  '其他散雜貨船東的換單工作',
+                                ]},
+                              ],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                            { id:'op-s4', name:'劉新喜', title:'船務操作專員', duty:'船務操作', grade:'專員', directManager:'op-c1',
+                              resps:[
+                                {desc:'', tasks:['回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']},
+                                {desc:'散裝船總代理（裕民、偉林、友聖、新興、大通）進出港作業', tasks:[
+                                  '進港前：收發EMAIL相關資料給船務辦理業務登記/進港預報，關務掛號',
+                                  '進港前：預估港費給總代理公司',
+                                  '進港前：碼頭及進港時間確定後，發MAIL通知船上及總代理等相關人員，製作NOR文件交給現場作業人員',
+                                  '船東工作：船員異動/加油/船東或總代理人員、眷屬、廠商申請登輪作業',
+                                  '船靠岸後：發ARRIVAL / DAILY WORKING REPORT 至總代理公司',
+                                  '船離岸後：發DEPARTURE REPORT至總代理，再將相關作業文件EMAIL給總代理',
+                                  '貨櫃船總代理（萬通、瑞世、式邦、民生）：開船後發TDR至總代理',
+                                  '每月月初製作前一個月船隻統計表給總經理',
+                                  '其他散雜貨船東的換單工作',
+                                ]},
+                              ],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                          ]
+                        },
+                        { id:'op-m2', name:'李岱玲', title:'船務操作經理', duty:'船務操作', grade:'經理', directManager:'op-vp',
+                          resps:[{desc:'', tasks:['協助副總經理出差或休假時管理油化船組工作分配','回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']}],
+                          permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                          color:'c-agency',
+                          children:[
+                            { id:'op-d1', name:'康靈祺', title:'船務操作副理', duty:'船務操作', grade:'副經理', directManager:'op-m2',
+                              resps:[{desc:'', tasks:['協助副總經理出差或休假時管理油化船組工作分配','回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']}],
+                              permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                              color:'c-mem', children:[] },
+                            { id:'op-s5', name:'賴雅婷', title:'船務操作專員', duty:'船務操作', grade:'專員', directManager:'op-m2', resps:[{desc:'', tasks:['回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                            { id:'op-s6', name:'王湞潞', title:'船務操作專員', duty:'船務操作', grade:'專員', directManager:'op-m2', resps:[{desc:'', tasks:['回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                            { id:'op-s7', name:'廖婕婷', title:'船務操作專員', duty:'船務操作', grade:'專員', directManager:'op-m2', resps:[{desc:'', tasks:['回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                          ]
+                        },
+                        { id:'op-d2', name:'呂文漪', title:'船務操作副理', duty:'船務操作', grade:'副經理', directManager:'op-vp',
+                          resps:[{desc:'', tasks:['協助副總經理出差或休假時管理油化船組工作分配','回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']}],
+                          permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                          color:'c-agency',
+                          children:[
+                            { id:'op-s8', name:'盧麗雯', title:'船務操作專員', duty:'船務操作', grade:'專員', directManager:'op-d2', resps:[{desc:'', tasks:['回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                            { id:'op-s9', name:'陳盈瑄', title:'船務操作專員', duty:'船務操作', grade:'專員', directManager:'op-d2', resps:[{desc:'', tasks:['回覆詢價，港口資訊，貨物裝卸貨相關訊息','報價','因應客戶需求尋找國內供應商，修理廠，水下檢查公司，等等並提供報價','與船長聯繫有關業務登記所需求文件，進港須注意事項，碼頭作業要求等','所有相關公司單位的聯繫，如貨主，報關行，公證行，裝卸公司等等','定期發船到通知','提單及艙單製作','及時回報客戶船舶動態','NOR, SOF 以及船東事項工作列表製作','聯絡與安排船用品與包裹清關及交船','船帳審核','船員交換']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                          ]
+                        },
+                      ]
+                    },
+                  ]
+                },
+                { id:'port', name:'港代理部', color:'c-port',
+                  children:[
+                    { id:'fvp', name:'廖永照', title:'現場船務副總', duty:'現場船務', grade:'副總經理', directManager:'gm',
+                      resps:[{
+                        desc:'',
+                        tasks:[
+                          '監督並協調現場同事工作任務執行',
+                          '監督所有現場與客戶聯繫郵件來往',
+                          '監督所有港帳費用',
+                          '為公司現場對外窗口，當正常或緊急事件之聯繫人',
+                        ]
+                      }],
+                      permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                      color:'c-port',
+                      children:[
+                        { id:'oil', name:'廖永照', title:'油化現場船務', duty:'油化現場船務', grade:'副總經理', color:'c-port',
+                          children:[
+                            { id:'oil1', name:'鄭文傑', title:'現場船務專員', duty:'現場船務', grade:'專員', directManager:'oil',
+                              resps:[{
+                                desc:'',
+                                tasks:[
+                                  '船到前聯繫相關人員，裝卸貨/船東事項事前安排，領港/司機等安排',
+                                  '船靠時文書簽屬，船東/船方事項執行',
+                                  '船岸等多方問題即時現場協調處理回報',
+                                  '船離後文件/船東/船方事項整理繳回',
+                                  '注意船隻的到港時間、靠那個碼頭、何時可以靠泊',
+                                  '事先連繫貨主、裝卸公司、倉儲公司、公證行、報關行等等',
+                                  '船隻進港後完成船東委託的工作、相關文件的簽屬',
+                                  '船隻在港期間，回報公司進度、動態等等',
+                                  '船隻離港後，把相關文件先掃瞄給公司，讓公司可以發給船東或是台灣總代理',
+                                ]
+                              }],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                            { id:'oil2', name:'蘇慶星', title:'現場船務專員', duty:'現場船務', grade:'專員', directManager:'oil',
+                              resps:[
+                                {
+                                  desc:'',
+                                  tasks:[
+                                    '船到前聯繫相關人員，裝卸貨/船東事項事前安排，領港/司機等安排',
+                                    '船靠時文書簽屬，船東/船方事項執行',
+                                    '船岸等多方問題即時現場協調處理回報',
+                                    '船離後文件/船東/船方事項整理繳回',
+                                    '注意船隻的到港時間、靠那個碼頭、何時可以靠泊',
+                                    '事先連繫貨主、裝卸公司、倉儲公司、公證行、報關行等等',
+                                    '船隻進港後完成船東委託的工作、相關文件的簽屬',
+                                    '船隻在港期間，回報公司進度、動態等等',
+                                    '船隻離港後，把相關文件先掃瞄給公司，讓公司可以發給船東或是台灣總代理',
+                                  ]
+                                },
+                                {
+                                  desc:'航政手續',
+                                  tasks:[
+                                    '收到船東的代理委託書後，公司的總代理小姐會跟船長或船東要這艘船的相關證書',
+                                    '上航港局的MTNET系統上查這艘船的資料是否有在MTNET系統內有建檔或是船的基本資料是否有更新等等。此時就要根據船長或船東給的證書跟航港局申請基本資料的維護',
+                                    '等船舶基本資料維護完畢後，提供有效的船東責任險保險證給航港局建檔',
+                                    '辦理業務登記',
+                                    '業務登記核准後，打進港預報',
+                                    '因公司的總代理小姐都會事先向船長或船東要整套航港局要審查的證書，儘量在船進港前把證書送給航港局審查，如果問題的話，能儘早解決',
+                                    '根據預計出港日期、時間，打出港預報',
+                                  ]
+                                }
+                              ],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                            { id:'oil3', name:'何偉群', title:'麥寮辦事處代表', duty:'麥寮現場船務', grade:'代表', directManager:'oil',
+                              resps:[{
+                                desc:'',
+                                tasks:[
+                                  '每日0930參與麥寮港區船席會議，安排所屬代理船舶靠泊碼頭及時程',
+                                  '在港船隻登輪確認驗艙、裝卸貨等相關訊息回報',
+                                  '協調各方單位溝通',
+                                  '安排船舶需求及日常所需補給（加油、加水、就醫等）',
+                                  '特殊客戶文件製作及夜間、假日提單簽發',
+                                  '主管及OP小姐其他交辦事項（收加水費用、送小包裹）',
+                                  '臨時或緊急狀況因應及處置',
+                                ]
+                              }],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                          ]
+                        },
+                        { id:'bulk', name:'劉昌城', title:'乾散雜現場船務經理', duty:'乾散雜現場船務', grade:'經理', directManager:'fvp',
+                          resps:[{
+                            desc:'',
+                            tasks:[
+                              '本部門裝卸散/雜貨為主',
+                              '高雄港公用碼頭船席調派，依現況條件調派最適碼頭靠泊作業',
+                              '安排及協調相關單位以確保船舶裝卸貨流程順暢',
+                              '維持客戶關係（船方及貨主）',
+                              '核對帳單以免造成客戶損失',
+                            ]
+                          }],
+                          permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                          color:'c-port',
+                          children:[
+                            { id:'bk1', name:'陳秉寬', title:'現場船務專員', duty:'現場船務', grade:'專員', color:'c-mem', children:[] },
+                            { id:'bk2', name:'陳立農', title:'現場船務專員', duty:'現場船務', grade:'專員', color:'c-mem', children:[] },
+                            { id:'bk3', name:'紀凱銘', title:'現場船務副理', duty:'現場船務', grade:'副經理', color:'c-mem', children:[] },
+                          ]
+                        },
+                        { id:'cont', name:'羅一平', title:'貨櫃現場船務經理', duty:'貨櫃現場船務', grade:'經理', directManager:'fvp',
+                          resps:[{
+                            desc:'',
+                            tasks:[
+                              '中外運公司 上海寧波航線＋澳洲線＋華北1、2線',
+                              '錦江海華 上海線＋太倉線',
+                              '民生公司 上海線',
+                              '寧遠公司 寧波線',
+                              '進出口船圖解析統計卸裝櫃數，傳送文件關務及碼頭人員處理後續業務',
+                              '和碼頭確認泊位，預報船期打引水單',
+                              '和碼頭確認完工時間，安排引水開航',
+                              '整理船圖，修改為總代理要求之格式，統計櫃量，到離港時間油水，發郵件給航線人員',
+                              '傳送船圖到總部系統，及詳細填寫到離港報數據，統計數據',
+                            ]
+                          }],
+                          permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                          color:'c-port',
+                          children:[
+                            { id:'ct1', name:'紀凱銘', title:'現場船務副理', duty:'現場船務', grade:'副經理', color:'c-mem', children:[] },
+                            { id:'ct2', name:'蘇慶星', title:'現場船務專員', duty:'現場船務', grade:'專員', color:'c-mem', children:[] },
+                          ]
+                        },
+                        { id:'portdm', name:'許佳榮', title:'港務副理', duty:'港務', grade:'副經理', directManager:'fvp',
+                          resps:[{desc:'', tasks:[
+                            '船隻到港前業務登記',
+                            '船隻相關證書申報、更新',
+                            '船隻進、出港預報',
+                            '船員相關業務（交換船員、船員名單申報）',
+                            '進、出港引水安排',
+                            '購買檢疫准單',
+                            '外籍人士臨時通行證辦理',
+                          ]}],
+                          permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                          color:'c-port',
+                          children:[
+                            { id:'pt1', name:'梁季暉', title:'港務專員', duty:'港務', grade:'專員', directManager:'portdm',
+                              resps:[{desc:'', tasks:[
+                                '船隻到港前業務登記',
+                                '船隻相關證書申報、更新',
+                                '船隻進、出港預報',
+                                '船員相關業務（交換船員、船員名單申報）',
+                                '進、出港引水安排',
+                              ]}],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                          ]
+                        },
+                        { id:'docdm', name:'邱台美', title:'文件部副理', duty:'文件', grade:'副經理', directManager:'fvp',
+                          resps:[{desc:'', tasks:[
+                            '製作出口結關及進口海關艙單文件',
+                          ]}],
+                          permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                          color:'c-port',
+                          children:[
+                            { id:'dc1', name:'顏佳怡', title:'文件專員', duty:'文件', grade:'專員', directManager:'docdm', resps:[{desc:'', tasks:['進出口海關文件作業']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                            { id:'dc2', name:'陽妮潔', title:'文件專員', duty:'文件', grade:'專員', directManager:'docdm', resps:[{desc:'', tasks:['進出口海關文件作業']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                            { id:'dc3', name:'薛愛倫', title:'文件專員', duty:'文件', grade:'專員', directManager:'docdm', resps:[{desc:'', tasks:['進出口海關文件作業']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                            { id:'dc4', name:'李俊賢', title:'關務專員', duty:'關務', grade:'專員', directManager:'docdm',
+                              resps:[
+                                {
+                                  desc:'全中資訊 EDI 系統',
+                                  tasks:[
+                                    '船舶海關基本檔建檔更新維護',
+                                    '船舶海關通關號碼（掛號）申請',
+                                    '航次資料建立維護',
+                                    '表頭傳送或更改（進口檔傳送彙總，出口檔傳送彙總及明細）',
+                                  ]
+                                },
+                                {
+                                  desc:'海關現場作業',
+                                  tasks:[
+                                    '助航服務費申請及購買或退費',
+                                    '規費購買',
+                                    '理船海關資料文件繳交或線上傳輸',
+                                    '貨櫃加封費申請',
+                                    '各式準單申請',
+                                    '貨物短溢卸申請',
+                                    '更改艙單內容（逾期）',
+                                    '更改准單內容（逾期）',
+                                    '更改船舶停靠碼頭（逾期）',
+                                    '更改貨物卸存地（逾期）',
+                                    'EDI系統傳輸缺漏之補正',
+                                    '貨櫃封條申請校正',
+                                    '罰款繳交',
+                                    '人工結關（系統維護或資料變更）',
+                                    'CTM 申辦或繳回簽收申請書',
+                                    '繳交進口艙單超出字元無法於通關系統顯示申請書',
+                                  ]
+                                },
+                                {
+                                  desc:'辦公室作業',
+                                  tasks:[
+                                    '貨櫃船聯營和自營船資料建檔維護',
+                                    '關港貿單一窗口網站應用',
+                                    '線上結關',
+                                    '空櫃申請',
+                                    '運輸業登記表格校正',
+                                    '加工區准單線上申辦',
+                                    '未加工證明線上申辦',
+                                    '更正卸存地線上申辦',
+                                    '掛號註銷線上申辦',
+                                  ]
+                                },
+                              ],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                          ]
+                        },
+                      ]
+                    },
+                  ]
+                },
+              ]
+            },
+            { id:'logistics', name:'物流事業處', color:'c-logistics',
+              children:[
+                { id:'freight', name:'海運承攬部', color:'c-freight',
+                  children:[
+                    { id:'frvp', name:'翁慧君', title:'海運承攬副總', duty:'海運承攬', grade:'副總經理', directManager:'gm',
+                      resps:[{desc:'', tasks:[
+                        '開發及評估國外代理能否適用',
+                        '船公司的熟悉及選用',
+                        '開發客戶，並留意客戶的經營情況及誠信，是否繼續服務',
+                        '授權讓部門主管來接手工作操作',
+                        '對地區的廠商熟悉，並能隨時解決業務的問題',
+                        '留意部門同事的心情及對事的適任承受度',
+                        '對應收及應付帳款的審核',
+                      ]}],
+                      permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                      color:'c-freight',
+                      children:[
+                        { id:'frop', name:'操作', color:'c-freight',
+                          children:[
+                            { id:'fro1', name:'簡麗玲', title:'操作/文件主任', duty:'操作/文件', grade:'主任', directManager:'frvp',
+                              resps:[{desc:'內部操作', tasks:[
+                                '協助業務向船公司及同行的各航線詢價',
+                                '有關國外代理的詢問及回覆',
+                                '訂艙',
+                                '教導進口文件人員進口操作',
+                                '教導外場操作「裝船通知書」',
+                                '留意船隻動態及即時回覆客戶',
+                                '協助業務應收帳款及單筆利潤的分享',
+                              ]}],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-freight',
+                              children:[
+                                { id:'fro1a', name:'陳宥如', title:'文件助理', duty:'文件', grade:'助理', directManager:'fro1',
+                                  resps:[{desc:'', tasks:[
+                                    '進出口文件的繕打',
+                                    '聯絡國外代理',
+                                    '簽發文件給客戶及核對進出口報單',
+                                    '提供應收帳款明細',
+                                    '寄發提單及發票',
+                                    '提供散裝船隻的動態及追蹤',
+                                  ]}],
+                                  permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                                  color:'c-mem', children:[] },
+                              ]
+                            },
+                            { id:'fro2', name:'蘇敉瑤', title:'文件出口主任', duty:'文件出口', grade:'主任', directManager:'frvp',
+                              resps:[{desc:'', tasks:[
+                                '進出口文件的繕打',
+                                '聯絡國外代理',
+                                '簽發文件給客戶及核對進出口報單',
+                                '提供應收帳款明細',
+                                '寄發提單及發票',
+                                '提供散裝船隻的動態及追蹤',
+                              ]}],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                            { id:'fro3', name:'郭永諒', title:'現場專員', duty:'現場', grade:'專員', directManager:'frvp',
+                              resps:[{desc:'外場操作', tasks:[
+                                '針對液袋的鋪裝及庫存',
+                                '工廠監裝及照片整理',
+                                '每周及每月提供 HOYER / PGF 的液袋庫存表',
+                                '針對液袋客戶的拖車及報關流程安排',
+                              ]}],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                          ]
+                        },
+                        { id:'frbiz', name:'業務', color:'c-freight',
+                          children:[
+                            { id:'frb1', name:'(TBD)', title:'業務專員', duty:'業務', grade:'專員', directManager:'frvp',
+                              resps:[{desc:'業務', tasks:[
+                                '不定期及定期的客戶拜訪及開發客戶',
+                                '進/出口一條龍服務的操作處理',
+                                '國外代理的找尋及配合',
+                                '協助內部同仁的疑難雜事的解決',
+                                '催收延遲應收帳款的催付',
+                                '客戶的進出口報價及流程安排及追蹤',
+                              ]}],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem',
+                              children:[
+                                { id:'frb1a', name:'李旻娟', title:'業務助理', color:'c-mem', children:[] },
+                              ]
+                            },
+                          ]
+                        },
+                      ]
+                    },
+                  ]
+                },
+                { id:'charter', name:'租船經紀部', color:'c-charter',
+                  children:[
+                    { id:'chvp', name:'呂文祺', title:'租船經紀副總', duty:'租船經紀', grade:'副總經理', directManager:'gm',
+                      resps:[{desc:'', tasks:[
+                        '公司任何相關業務的開發推廣維繫',
+                        '負責相關部門的人事',
+                        '協助總經理的交辦事項',
+                        '台北分公司行政',
+                      ]}],
+                      permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                      color:'c-charter',
+                      children:[
+                        { id:'chop', name:'操作', color:'c-charter',
+                          children:[
+                            { id:'cho1', name:'林詩倩', title:'租船經紀操作專員', duty:'租船經紀操作', grade:'專員', directManager:'chvp', funcManager:'chb3',
+                              resps:[
+                                {desc:'', tasks:[
+                                  '負責業務人員所承攬化學散裝輪業務的OP工作',
+                                  '負責業務人員乾散雜貨輪業務的OP工作',
+                                  '與客戶及船東不定期應酬聚會',
+                                ]},
+                                {desc:'', tasks:[
+                                  '每週四交鋼鐵市場的WEEKLY REPORT給船東Hyundai Glovis（每日蒐集競爭者船隻動態製成週報/統計表）',
+                                  '如承攬有承接到鋼鐵貨洽Hyundai Glovis的船出口，負責處理出口運費稅事宜（幫船東申請減免2%運費稅）',
+                                  'Hyundai Glovis船東來訪，幫忙接待、晚宴、準備伴手禮等瑣事',
+                                ]},
+                              ],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                            { id:'cho2', name:'許玉燕', title:'租船經紀操作專員', duty:'租船經紀操作', grade:'專員', directManager:'chvp', funcManager:'chb1',
+                              resps:[
+                                {desc:'', tasks:[
+                                  '負責業務人員所承攬化學散裝輪業務的OP工作',
+                                ]},
+                                {desc:'', tasks:[
+                                  '協助高雄總公司各部門的提單列印給相關主管簽名',
+                                ]},
+                              ],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                            { id:'cho3', name:'蘇崇瑋', title:'租船經紀文件專員', duty:'租船經紀文件', grade:'專員', directManager:'chvp',
+                              resps:[
+                                {desc:'', tasks:[
+                                  '送/發/換提單給客人和船公司',
+                                  '協助高雄總公司各部門列印提單',
+                                  '協助拜船東的訪台證',
+                                ]},
+                                {desc:'外務', tasks:[
+                                  '外務',
+                                ]},
+                              ],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                          ]
+                        },
+                        { id:'chbiz', name:'業務', color:'c-charter',
+                          children:[
+                            { id:'chb1', name:'王仁育', title:'租船經紀業務協理', duty:'租船經紀業務', grade:'協理', directManager:'chvp', resps:[{desc:'', tasks:['客戶開發','銷售洽談','市場分析','達成業績目標']}], permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'], color:'c-mem', children:[] },
+                            { id:'chb2', name:'李一中', title:'租船經紀業務協理', duty:'租船經紀業務', grade:'協理', directManager:'chvp', resps:[{desc:'', tasks:['客戶開發','銷售洽談','市場分析','達成業績目標']}], permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'], color:'c-mem', children:[] },
+                            { id:'chb3', name:'陸藝',   title:'租船經紀業務經理', duty:'租船經紀業務', grade:'經理', directManager:'chvp', resps:[{desc:'', tasks:['客戶開發','銷售洽談','市場分析','達成業績目標']}], permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'], color:'c-mem', children:[] },
+                            { id:'chb4', name:'曾健倫', title:'租船經紀業務經理', duty:'租船經紀業務', grade:'經理', directManager:'chvp', resps:[{desc:'', tasks:['客戶開發','銷售洽談','市場分析','達成業績目標']}], permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'], color:'c-mem', children:[] },
+                          ]
+                        },
+                      ]
+                    },
+                  ]
+                },
+                { id:'chem', name:'化學櫃租賃部', color:'c-chem',
+                  children:[
+                    { id:'chvp2', name:'呂文祺', title:'化學櫃租賃副總', duty:'化學櫃租賃', grade:'副總經理', color:'c-chem',
+                      children:[
+                        { id:'cham', name:'王書婷', title:'業務協理', duty:'業務', grade:'協理', directManager:'chvp2',
+                          resps:[{desc:'', tasks:[
+                            '客戶開發',
+                            '銷售洽談',
+                            '市場分析',
+                            '達成業績目標',
+                          ]}],
+                          permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                          color:'c-chem',
+                          children:[
+                            { id:'chs1', name:'趙玉如', title:'進口文件', duty:'進口文件', grade:'專員', directManager:'cham',
+                              resps:[
+                                {desc:'進口文件', tasks:[
+                                  '進口OP',
+                                  '提供進口船公司切結、進口客戶到貨通知/費用明細/還櫃通知',
+                                  '接收各國代理到貨通知，更新REAL SYSTEM',
+                                  '開發票、船公司換單',
+                                  '結算HOYER每月進口櫃子延滯費，更新進口櫃子動態報表',
+                                  '提供每月進口報表',
+                                  '聯華氣體櫃的空櫃退運安排：等待聯華通知退運日期，Linde通知目的港後排船訂艙',
+                                  '新加坡提供合約價格與PIR後，繕打DG申報書，連同PIR提供給船公司',
+                                  'S/O下來後，繕打裝船通知書給聯華、報關行、新加坡櫃東、出口文件',
+                                  '巴斯夫自有櫃進出口：提供進口INV & P/L',
+                                  '開JOB#，提供出口SHIPPING ADVICE給櫃東，更新系統',
+                                  '開操作費USD550台幣發票',
+                                  '電子加熱及食品空櫃退運安排',
+                                  '協助業務所攬的進口業務訂艙和客人以及代理聯繫',
+                                ]},
+                                {desc:'出口文件', tasks:[
+                                  '製作HBL核對給客戶',
+                                  '上傳MBL作法給船公司',
+                                  '核對/修改HBL和MBL',
+                                  '更新船期給客戶',
+                                  'Key Hoyer系統-Real system',
+                                  '發HBL及請款付給船公司及領MBL',
+                                  '通知台北印單送單事宜',
+                                  '發提單掃描檔給客戶和代理',
+                                  '開發票跟客戶請款',
+                                  '整理銷帳資料給會計',
+                                ]},
+                              ],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                            { id:'chs2', name:'潘綵瑄', title:'貨櫃控制', duty:'貨櫃控制', grade:'專員', directManager:'cham',
+                              resps:[{desc:'控櫃操作', tasks:[
+                                'Key SHIPPING ADVICE等相關報價資料',
+                                'Key DG申報書',
+                                '安排櫃子南北拖',
+                                '更新Hoyer系統',
+                                '平時有DOOR SERVICE需幫忙詢拖車費，需幫忙訂艙、詢價等業務上的工作',
+                              ]}],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                            { id:'chs3', name:'林詩倩', title:'操作', duty:'操作', grade:'專員', directManager:'cham',
+                              resps:[
+                                {desc:'操作', tasks:[
+                                  '訂位表更新','櫃租詢價及議價','更新海運費、海運費議價','船期安排','訂艙',
+                                  '初步DG送審','跟催確認訂艙','出貨櫃子安排和確認規格','批價費用',
+                                  '確認系統內容出單','處理爭議費用','排解船公司問題','排解客戶出貨問題','排解櫃東問題',
+                                ]},
+                                {desc:'', tasks:[
+                                  '分擔部份業務協理的顧客服務工作（訂艙、船期、詢價、客訴等事務）',
+                                  '負責FILING上傳從台灣、柬埔寨、越南出口至美國線的運費',
+                                ]},
+                              ],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                            { id:'chs4', name:'李芝瑜', title:'操作', duty:'操作', grade:'專員', directManager:'cham',
+                              resps:[{desc:'操作', tasks:[
+                                '訂位表更新','櫃租詢價及議價','更新海運費、海運費議價','船期安排','訂艙',
+                                '初步DG送審','跟催確認訂艙','出貨櫃子安排和確認規格','批價費用',
+                                '確認系統內容出單','處理爭議費用','排解船公司問題','排解客戶出貨問題','排解櫃東問題',
+                              ]}],
+                              permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                              color:'c-mem', children:[] },
+                            { id:'chs5', name:'葉詩怡', title:'文件專員', duty:'文件', grade:'專員', color:'c-chem',
+                              children:[
+                                { id:'chs5a', name:'林崇欣', title:'文件專員', duty:'文件', grade:'專員', color:'c-mem', children:[] },
+                              ]
+                            },
+                          ]
+                        },
+                      ]
+                    },
+                  ]
+                },
+              ]
+            },
+            { id:'acct', name:'會計部', color:'c-acct',
+              children:[
+                { id:'awis', name:'徐淑玲', title:'航昇威仕經理', duty:'航昇威仕會計', grade:'經理', directManager:'gm',
+                  resps:[{desc:'', tasks:[
+                    '傳票審核',
+                    '銀行業務處理',
+                    '港灣相關費用初步審核',
+                    '進項稅申報整理',
+                    '公司帳務統整與管理',
+                    '財務報表製作',
+                  ]}],
+                  permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                  color:'c-acct',
+                  children:[
+                    { id:'aship', name:'船帳', color:'c-acct',
+                      children:[
+                        { id:'as1', name:'葉盈儀', title:'船帳', duty:'船帳', grade:'專員', directManager:'awis', resps:[{desc:'', tasks:['整理並彙總船帳資料','核對各港口提供之費用憑證資料','預估相關費用']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                        { id:'as2', name:'張淑娟', title:'船帳', duty:'船帳', grade:'專員', directManager:'awis', resps:[{desc:'', tasks:['整理並彙總船帳資料','核對各港口提供之費用憑證資料','預估相關費用']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                        { id:'as3', name:'陳怡分', title:'船帳', duty:'船帳', grade:'專員', directManager:'awis', resps:[{desc:'', tasks:['整理並彙總船帳資料','核對各港口提供之費用憑證資料','預估相關費用']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                        { id:'as4', name:'陳韋伶', title:'船帳', duty:'船帳', grade:'專員', directManager:'awis', resps:[{desc:'', tasks:['整理並彙總船帳資料','核對各港口提供之費用憑證資料','預估相關費用']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                        { id:'as5', name:'凌曉恬', title:'船帳', duty:'船帳', grade:'專員', directManager:'awis', resps:[{desc:'', tasks:['整理並彙總船帳資料','核對各港口提供之費用憑證資料','預估相關費用']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                        { id:'as6', name:'李惠銘', title:'船帳', duty:'船帳', grade:'專員', directManager:'awis', resps:[{desc:'', tasks:['整理並彙總船帳資料','核對各港口提供之費用憑證資料','預估相關費用']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                      ]
+                    },
+                    { id:'aacc', name:'會計', color:'c-acct',
+                      children:[
+                        { id:'aa1', name:'曾慧怡', title:'會計', duty:'會計', grade:'專員', directManager:'awis', resps:[{desc:'', tasks:['國內廠商發票相關聯繫、廠商應付款、協助支票開立','租船部國際運輸運費稅申請/申報','營業稅銷項申報整理','船帳審核與入帳確認','國外客戶應收／應付帳款管理']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                        { id:'aa2', name:'葉容禎', title:'會計', duty:'會計', grade:'專員', directManager:'awis', resps:[{desc:'', tasks:['國內廠商發票相關聯繫、廠商應付款、協助支票開立','租船部國際運輸運費稅申請/申報','營業稅銷項申報整理','船帳審核與入帳確認','國外客戶應收／應付帳款管理']}], permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'], color:'c-mem', children:[] },
+                      ]
+                    },
+                    { id:'acash', name:'方麗娜', title:'出納', duty:'出納', grade:'專員', directManager:'awis',
+                      resps:[{desc:'', tasks:[
+                        '負責公司日常現金及銀行帳務收付處理',
+                        '辦理差旅費及各項補助的發放',
+                        '定期對銀行存款進行對帳',
+                        '負責每月20號結帳之應付帳款支票開立',
+                      ]}],
+                      permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                      color:'c-mem', children:[] },
+                  ]
+                },
+                { id:'anav', name:'謝宛真', title:'航昇船務副理', duty:'航昇船務會計', grade:'副經理', directManager:'gm',
+                  resps:[{desc:'', tasks:[
+                    '航昇 Chartering 會計業務及國稅局申報',
+                    '航昇外帳出差費管理',
+                    '航昇內帳與外帳檢核及調整',
+                    '航昇與集團公司間之往來帳處',
+                    '航昇 / Chartering 年度損益統計',
+                    '越南公司財務報表統整',
+                    '境外公司文件處理',
+                    '協助總經理交辦事項',
+                  ]}],
+                  permissions:['對部屬工作有檢查權','對部屬在工作中的爭議有裁判權','在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權','有對直屬部屬職務調配的建議權、任命的提名權和獎懲建議權','對所屬部屬的管理標準、業務標準和業績有考核評價權'],
+                  color:'c-acct',
+                  children:[
+                    { id:'ach', name:'李維玲', title:'租船經紀會計', duty:'租船經紀會計', grade:'專員', directManager:'anav', funcManager:'chvp',
+                      resps:[
+                        {desc:'', tasks:[
+                          '稅務處理（如營業稅、營所稅）',
+                          '帳務處理（處理日常的會計帳務）',
+                          '配合會計師進行財務稽核',
+                        ]},
+                        {desc:'行政庶務', tasks:[
+                          '台北辦公室相關行政庶務',
+                        ]},
+                      ],
+                      permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                      color:'c-mem', children:[] },
+                    { id:'acm1', name:'孫玉珊', title:'化學櫃租賃會計', duty:'化學櫃租賃會計', grade:'專員', directManager:'anav', funcManager:'chvp2',
+                      resps:[{desc:'', tasks:[
+                        'Hoyer的國外帳',
+                        '跟Hoyer申請在台灣的代收代付部份',
+                        'HOYER 內帳',
+                        '航昇船務之外帳',
+                      ]}],
+                      permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                      color:'c-mem', children:[] },
+                    { id:'acm2', name:'郭淑慧', title:'化學櫃租賃會計', duty:'化學櫃租賃會計', grade:'專員', directManager:'anav', funcManager:'chvp2',
+                      resps:[{desc:'', tasks:[
+                        'Hoyer的國外帳',
+                        '跟Hoyer申請在台灣的代收代付部份',
+                        'HOYER 內帳',
+                        '航昇船務之外帳',
+                      ]}],
+                      permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                      color:'c-mem', children:[] },
+                    { id:'afr', name:'阮翊甯', title:'承攬會計', duty:'承攬會計', grade:'專員', directManager:'anav', funcManager:'frvp',
+                      resps:[{desc:'會計', tasks:[
+                        '報關行及拖車及鋪袋場及各月結會計帳的處理',
+                        '每個月的催收郵件及HOYER 國外帳處理',
+                        '單筆帳的結檔及分析表列印',
+                        '對銀行及國內/外支付單的付款及客戶的收款入帳',
+                        '對內部進出口帳明細的核對',
+                      ]}],
+                      permissions:['在權限範圍內，有代表公司對外聯絡的權力','有對各項費用開支的審核權','對限額資金使用有批准權'],
+                      color:'c-acct',
+                      children:[
+                        { id:'afr1', name:'賴芊華', title:'承攬會計助理', duty:'承攬會計', grade:'助理', color:'c-mem', children:[] },
+                      ]
+                    },
+                  ]
+                },
+              ]
+            },
+          ]
+        },
+      ]
+    },
+  ]
+};
+
+const NODE_W = 120, NODE_H = 52, LEVEL_H = 90, COL_GAP = 18;
+const _0x3c4d = new Set();
+let _0x1a2b = {};
+let scale = 1, panX = 0, panY = 0;
+let _0xc267 = false, _0xd389, _0xe4ab, _0xf5cd, _0x06ef;
+
+function _0x5e6f(node) {
+  if (_0x3c4d.has(node.id) || !node.children || !node.children.length) return NODE_W + COL_GAP;
+  const childW = node.children.map(c => _0x5e6f(c));
+  return Math.max(NODE_W + COL_GAP, childW.reduce((a,b)=>a+b,0));
+}
+
+function _0x7a8b(node, x, y, positions) {
+  positions[node.id] = { x, y, node };
+  if (_0x3c4d.has(node.id) || !node.children || !node.children.length) return;
+  const childW = node.children.map(c => _0x5e6f(c));
+  const totalW = childW.reduce((a,b)=>a+b,0);
+  let cx = x - totalW/2;
+  node.children.forEach((child, i) => {
+    const cw = childW[i];
+    _0x7a8b(child, cx + cw/2, y + LEVEL_H, positions);
+    cx += cw;
+  });
+}
+
+function _0x9c0d() {
+  const svg = document.getElementById('svg-canvas');
+  const W = svg.clientWidth || 800;
+  const H = svg.clientHeight || 620;
+  _0x1a2b = {};
+  _0x7a8b(data, W/2, 110, _0x1a2b);
+
+  const xs = Object.values(_0x1a2b).map(p=>p.x);
+  const ys = Object.values(_0x1a2b).map(p=>p.y);
+  const minX = Math.min(...xs) - NODE_W/2 - 20;
+  const maxX = Math.max(...xs) + NODE_W/2 + 20;
+  const minY = Math.min(...ys) - 60;
+  const maxY = Math.max(...ys) + NODE_H + 20;
+  const contentW = maxX - minX;
+  const contentH = maxY - minY;
+
+  let html = `<defs>
+    <filter id="glow-top"      x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow-staff"    x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow-shipping" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow-agency"   x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow-port"     x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow-logistics" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow-freight"  x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow-charter"  x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow-chem"     x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow-acct"     x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow-mem"      x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>`;
+  html += `<g id="main-g" transform="translate(${panX},${panY}) scale(${scale})">`;
+
+  const titleX = W / 2;
+  const titleY = _0x1a2b[data.id] ? _0x1a2b[data.id].y - 48 : 30;
+  html += `<text x="${titleX}" y="${titleY}" text-anchor="middle" font-size="18" font-weight="500" fill="#D4D4D4" font-family="inherit" letter-spacing="2">航昇關係企業組織圖</text>`;
+  html += `<text x="${titleX}" y="${titleY + 22}" text-anchor="middle" font-size="12" fill="#808080" font-family="inherit">2026 年 3 月</text>`;
+
+  function _0x1e2f(node) {
+    if (_0x3c4d.has(node.id) || !node.children || !node.children.length) return;
+    const p = _0x1a2b[node.id];
+    node.children.forEach(child => {
+      const c = _0x1a2b[child.id];
+      if (!c) return;
+      const x1=p.x, y1=p.y+NODE_H, x2=c.x, y2=c.y;
+      const my=(y1+y2)/2;
+      html += `<path d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}" fill="none" stroke="#3C3C3C" stroke-width="1.2"/>`;
+      _0x1e2f(child);
+    });
+  }
+
+  function _0x3a4b(node, _0x1711) {
+    const pos = _0x1a2b[node.id];
+    if (!pos) return;
+    const { x, y } = pos;
+    const nx = x - NODE_W/2;
+    const c = COLORS[node.color] || COLORS['c-mem'];
+    const hasKids = node.children && node.children.length > 0;
+    const isCol = _0x3c4d.has(node.id);
+
+    const stroke = (node.color === 'c-mem' && _0x1711) ? _0x1711 : c.stroke;
+    const _0xc277 = (node.color === 'c-mem' && _0x1711) ? _0x1711 : c.sub;
+    
+    const _0x2833 = (node.color !== 'c-mem') ? c.stroke : _0x1711;
+
+    html += `<g class="node-group" data-id="${node.id}" data-stroke="${stroke}">`;
+    html += `<rect class="node-rect" x="${nx}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="8" fill="${c.fill}" stroke="${stroke}" stroke-width="0.5"/>`;
+
+    const _0x5b99 = new Set(['c-top','c-staff','c-dept','c-shipping','c-agency','c-port','c-logistics','c-freight','c-charter','c-chem','c-acct']);
+    const _0x4a77 = _0x5b99.has(node.color) && !node.title ? '700' : '500';
+
+    const _0x3955 = node.duty || node.title || null;
+    const nameY = _0x3955 ? y+20 : y+30;
+    html += `<text x="${x}" y="${nameY}" text-anchor="middle" font-size="13" font-weight="${_0x4a77}" fill="${c.text}" font-family="inherit">${node.name}</text>`;
+    if (_0x3955) {
+      html += `<text x="${x}" y="${y+35}" text-anchor="middle" font-size="10" fill="${_0xc277}" font-family="inherit">${_0x3955}</text>`;
+    }
+
+    if (hasKids) {
+      const btnX = x, btnY = y + NODE_H;
+      html += `<circle cx="${btnX}" cy="${btnY}" r="8" fill="${c.fill}" stroke="${stroke}" stroke-width="0.5"/>`;
+      html += `<text x="${btnX}" y="${btnY+4}" text-anchor="middle" font-size="11" fill="${c.text}" font-family="inherit">${isCol?'+':'−'}</text>`;
+    }
+    html += `</g>`;
+
+    if (!isCol && hasKids) node.children.forEach(child => _0x3a4b(child, _0x2833));
+  }
+
+  _0x1e2f(data);
+  _0x3a4b(data, null);
+  html += '</g>';
+  svg.innerHTML = html;
+  _0x5c6d();
+}
+
+function _0x5c6d() {
+  document.querySelectorAll('.node-group').forEach(g => {
+    const rect = g.querySelector('.node-rect');
+    const stroke = g.dataset.stroke || '#D4D4D4';
+
+    g.addEventListener('mouseenter', () => {
+      if (!rect) return;
+      rect.style.stroke = stroke;
+      rect.style.strokeWidth = '1.5';
+      rect.style.filter = `drop-shadow(0 0 4px ${stroke}) drop-shadow(0 0 10px ${stroke}80) drop-shadow(0 0 20px ${stroke}40)`;
+    });
+    g.addEventListener('mouseleave', () => {
+      if (!rect) return;
+      rect.style.stroke = stroke;
+      rect.style.strokeWidth = '0.5';
+      rect.style.filter = '';
+    });
+
+    g.addEventListener('click', e => {
+      e.stopPropagation();
+      const id = g.dataset.id;
+      const pos = _0x1a2b[id];
+      if (!pos) return;
+      const node = pos.node;
+      if (node.noPanel) { if (node.children&&node.children.length) _0x7e8f(id); return; }
+      if (node.children && node.children.length) {
+        _0x7e8f(id);
+        if (node.title) _0x9a0b(node);
+      } else {
+        _0x9a0b(node);
+      }
+    });
+    g.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      const id = g.dataset.id;
+      const pos = _0x1a2b[id];
+      if (pos && !pos.node.noPanel) _0x9a0b(pos.node);
+    });
+  });
+}
+
+function _0x7e8f(id) {
+  if (_0x3c4d.has(id)) _0x3c4d.delete(id);
+  else _0x3c4d.add(id);
+  _0x9c0d();
+}
+
+const GRADES = ['副總經理','執行長','總經理','董事長','副總','協理','經理','副理','專員','助理','主任','代表','秘書','特助'];
+
+const _0x8eff = ['會計','船帳','操作','文件','業務','關務','出納'];
+
+function _0x7a9b(title) {
+  if (!title) return { duty: '—', grade: '—' };
+  
+  for (const d of _0x8eff) {
+    if (title === d) return { duty: d, grade: '專員' };
+  }
+  
+  for (const g of GRADES) {
+    const idx = title.lastIndexOf(g);
+    if (idx !== -1) {
+      const duty = title.slice(0, idx).trim() || '—';
+      return { duty, grade: g };
+    }
+  }
+  return { duty: title, grade: '專員' };
+}
+
+function _0x9a0b(node) {
+  const stroke = (COLORS[node.color] || COLORS['c-mem']).stroke;
+  const initials = node.name.replace(/[／/、，, ]/g,'').slice(0,2);
+
+  const av = document.getElementById('dp-avatar');
+  av.textContent = initials;
+  av.style.background = stroke + '22';
+  av.style.color = stroke;
+  av.style.border = `0.5px solid ${stroke}`;
+  document.getElementById('dp-name').textContent  = node.name;
+  document.getElementById('dp-title').textContent = node.title || node.duty || '';
+
+  const duty  = node.duty  ?? _0x7a9b(node.title).duty;
+  const grade = node.grade ?? _0x7a9b(node.title).grade;
+
+  let html = '';
+
+  html += section([
+    row('職務', duty,  '#D4D4D4'),
+    row('職等', grade, '#9CDCFE'),
+  ]);
+
+  if (node.resps && node.resps.length) {
+    node.resps.forEach((r, i) => {
+      html += _0x8c0d();
+      if (node.resps.length > 1) {
+        html += `<div style="font-size:11px;color:#569CD6;font-weight:600;margin-bottom:6px;letter-spacing:0.05em;">職責 ${i+1}</div>`;
+      }
+      if (r.desc) html += row('職責描述', r.desc, '#D4D4D4');
+      if (r.tasks && r.tasks.length) {
+        html += _0xb145('工作任務');
+        html += list(r.tasks, '#C8C8C8');
+      }
+    });
+  }
+
+  if (node.permissions && node.permissions.length) {
+    html += _0x8c0d();
+    html += _0xb145('權限');
+    html += list(node.permissions, '#DCDCAA');
+  }
+
+  const dept = node.dept ? _0x3e5f(node.dept) : _0x4a6b(node.id);
+  const hasMgr = node.directManager || node.funcManager;
+  if (dept || hasMgr) {
+    html += _0x8c0d();
+    if (dept) html += row('部門', dept.name, '#D4D4D4');
+    if (node.directManager) {
+      const dm = _0x3e5f(node.directManager);
+      const dmLabel = dm ? (dm.title || dm.name) : node.directManager;
+      html += _0xa023('直屬主管', dmLabel, node.directManager, stroke);
+    }
+    if (node.funcManager) {
+      const fm = _0x3e5f(node.funcManager);
+      const fmLabel = fm ? (fm.title || fm.name) : node.funcManager;
+      html += _0xa023('功能主管', fmLabel, node.funcManager, stroke);
+    }
+  }
+
+  document.getElementById('dp-body').innerHTML = html;
+
+  document.querySelectorAll('#dp-body .mgr-link').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = el.dataset.id;
+      const pos = _0x1a2b[id];
+      if (!pos) return;
+      _0x5c7d(id);
+      _0x9a0b(pos.node);
+    });
+  });
+
+  document.getElementById('detail-panel').classList.add('show');
+  document.getElementById('panel-overlay').classList.add('show');
+}
+
+function _0x1c2d() {
+  document.getElementById('detail-panel').classList.remove('show');
+  document.getElementById('panel-overlay').classList.remove('show');
+}
+
+function _0x8c0d() {
+  return `<div style="border-top:0.5px solid #2D2D2D;margin:10px 0;"></div>`;
+}
+function section(rows) {
+  return `<div style="display:flex;flex-direction:column;gap:2px;">${rows.join('')}</div>`;
+}
+function row(label, value, color) {
+  return `<div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px;padding:4px 0;border-bottom:0.5px solid #2A2A2A;">
+    <span style="color:#606060;flex-shrink:0;margin-right:12px;">${label}</span>
+    <span style="color:${color};text-align:right;">${value}</span>
+  </div>`;
+}
+function _0xa023(label, name, id, _0xd399) {
+  return `<div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px;padding:4px 0;border-bottom:0.5px solid #2A2A2A;">
+    <span style="color:#606060;flex-shrink:0;margin-right:12px;">${label}</span>
+    <span class="mgr-link" data-id="${id}" style="color:${_0xd399};text-align:right;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px;">${name}</span>
+  </div>`;
+}
+function _0xb145(label) {
+  return `<div style="font-size:11px;color:#606060;margin:6px 0 4px;letter-spacing:0.05em;">${label}</div>`;
+}
+function list(items, color) {
+  return `<div style="display:flex;flex-direction:column;gap:3px;">` +
+    items.map((t,i) =>
+      `<div style="font-size:12px;color:${color};line-height:1.6;display:flex;gap:6px;">
+        <span style="color:#3C3C3C;flex-shrink:0;">${i+1}.</span>
+        <span style="white-space:pre-wrap;">${t}</span>
+      </div>`
+    ).join('') +
+  `</div>`;
+}
+
+function _0x3e5f(id) {
+  function search(node) {
+    if (node.id === id) return node;
+    if (node.children) for (const c of node.children) { const r = search(c); if (r) return r; }
+    return null;
+  }
+  return search(data);
+}
+
+const _0x6cbb = new Set(['c-shipping','c-agency','c-port','c-logistics','c-freight','c-charter','c-chem','c-acct','c-staff']);
+function _0x4a6b(targetId) {
+  function search(node, parent) {
+    if (node.id === targetId) return parent;
+    if (node.children) {
+      for (const c of node.children) {
+        const r = search(c, _0x6cbb.has(node.color) && !node.title ? node : parent);
+        if (r !== undefined) return r;
+      }
+    }
+    return undefined;
+  }
+  return search(data, null);
+}
+
+function _0x5c7d(id) {
+  
+  function expandPath(node, targetId) {
+    if (node.id === targetId) return true;
+    if (node.children) {
+      for (const c of node.children) {
+        if (expandPath(c, targetId)) {
+          _0x3c4d.delete(node.id);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  expandPath(data, id);
+  _0x9c0d();
+
+  const pos = _0x1a2b[id];
+  if (!pos) return;
+  const svg = document.getElementById('svg-canvas');
+  const W = svg.clientWidth || 800;
+  const H = svg.clientHeight || 620;
+  panX = W/2 - pos.x * scale;
+  panY = H/2 - pos.y * scale;
+  _0x9c0d();
+}
+
+function _0x3e4f() { _0x3c4d.clear(); _0x9c0d(); }
+function _0x5a6b() {
+  function addAll(n) {
+    if (n.children&&n.children.length) { _0x3c4d.add(n.id); n.children.forEach(addAll); }
+  }
+  addAll(data);
+  _0x9c0d();
+}
+
+function _0x7c8d() {
+  const svg = document.getElementById('svg-canvas');
+  const W = svg.clientWidth||800, H = svg.clientHeight||620;
+  _0x1a2b = {};
+  _0x7a8b(data, W/2, 110, _0x1a2b);
+  const xs = Object.values(_0x1a2b).map(p=>p.x);
+  const ys = Object.values(_0x1a2b).map(p=>p.y);
+  const minX = Math.min(...xs)-NODE_W/2-30;
+  const maxX = Math.max(...xs)+NODE_W/2+30;
+  const minY = Math.min(...ys)-20;
+  const maxY = Math.max(...ys)+NODE_H+30;
+  const contentW = maxX-minX, contentH = maxY-minY;
+  scale = Math.min((W*0.95)/contentW, (H*0.95)/contentH, 1);
+  panX = (W - contentW*scale)/2 - minX*scale;
+  panY = (H - contentH*scale)/2 - minY*scale;
+  _0x9c0d();
+}
+function _0x9e0f() { scale=1; panX=0; panY=0; _0x7c8d(); }
+function _0x1a3b()  { scale = Math.min(scale*1.2, 3); _0x9c0d(); }
+function _0x2c4d() { scale = Math.max(scale*0.8, 0.1); _0x9c0d(); }
+
+const svg = document.getElementById('svg-canvas');
+svg.addEventListener('mousedown', e => {
+  if (e.target.closest('.node-group')) return;
+  _0xc267=true; _0xd389=e.clientX; _0xe4ab=e.clientY;
+  _0xf5cd=panX; _0x06ef=panY;
+  svg.classList.add('dragging');
+});
+window.addEventListener('mousemove', e => {
+  if (!_0xc267) return;
+  panX = _0xf5cd+(e.clientX-_0xd389);
+  panY = _0x06ef+(e.clientY-_0xe4ab);
+  _0x9c0d();
+});
+window.addEventListener('mouseup', ()=>{ _0xc267=false; svg.classList.remove('dragging'); });
+
+svg.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = svg.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const factor = e.deltaY > 0 ? 0.9 : 1.1;
+  panX = mx - (mx-panX)*factor;
+  panY = my - (my-panY)*factor;
+  scale = Math.min(Math.max(scale*factor, 0.1), 3);
+  _0x9c0d();
+}, {passive:false});
+
+svg.addEventListener('touchstart', e=>{
+  if(e.touches.length===1){ _0xd389=e.touches[0].clientX; _0xe4ab=e.touches[0].clientY; _0xf5cd=panX; _0x06ef=panY; _0xc267=true; }
+},{passive:true});
+svg.addEventListener('touchmove', e=>{
+  if(!_0xc267||e.touches.length!==1) return;
+  panX=_0xf5cd+(e.touches[0].clientX-_0xd389);
+  panY=_0x06ef+(e.touches[0].clientY-_0xe4ab);
+  _0x9c0d(); e.preventDefault();
+},{passive:false});
+svg.addEventListener('touchend',()=>{_0xc267=false;});
+
+document.getElementById('btn-expand').addEventListener('click', _0x3e4f);
+document.getElementById('btn-collapse').addEventListener('click', _0x5a6b);
+document.getElementById('btn-reset').addEventListener('click', _0x9e0f);
+document.getElementById('btn-zoomin').addEventListener('click', _0x1a3b);
+document.getElementById('btn-zoomout').addEventListener('click', _0x2c4d);
+document.getElementById('panel-overlay').addEventListener('click', _0x1c2d);
+document.getElementById('detail-close').addEventListener('click', _0x1c2d);
+
+document.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey && ['s','u','a','p'].includes(e.key.toLowerCase())) ||
+      e.key === 'F12' ||
+      (e.ctrlKey && e.shiftKey && ['i','j','c'].includes(e.key.toLowerCase())))
+    e.preventDefault();
+});
+
+function _0x6e8f() {
+  function _0xf5dd(node, depth) {
+    if (!node.children || !node.children.length) return;
+    if (depth >= 3) { _0x3c4d.add(node.id); }
+    node.children.forEach(c => _0xf5dd(c, depth+1));
+  }
+  _0xf5dd(data, 0);
+}
+_0x6e8f();
+setTimeout(()=>{ _0x7c8d(); }, 80);
+</script>
